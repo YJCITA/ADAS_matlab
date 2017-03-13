@@ -1,1 +1,0 @@
-gsensor_data = load('./log-gsensor.ini')';
