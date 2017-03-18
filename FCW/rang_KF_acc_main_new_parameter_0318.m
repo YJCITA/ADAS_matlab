@@ -164,7 +164,7 @@ for log_index = 1:NUM_log
                 % 低通滤波处理                    
                 dt = time_vision - time_vision_range_pre;
                 time_vision_range_pre = time_vision;
-                filt_hz = 0.4; % 为了控制波动  基本0.5是极限
+                filt_hz = 0.7; % 为了控制波动  基本0.7是极限（>1之后就会引入车辆波动导致的车速变化）
                 [ vison_range_cur ] = fun_LowpassFilter( vison_range_cur, vison_range_raw, dt, filt_hz ); 
 
                 % X = [d, vs, vt]' 车距，本车速度，目标车速
