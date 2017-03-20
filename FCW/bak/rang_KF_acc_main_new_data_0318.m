@@ -192,7 +192,6 @@ for l1_i = 1 : length( sub_l1_dir )
             plot(save_vision_raw(1,:), save_vision_raw(2,:), '.'); % vision range Á¿²â
             hold on;
             plot(save_Xk(1,:), save_Xk(2,:), '.'); % range-estimate
-            plot(save_Xk(1,:), save_Xk(2,:), '.'); % range-estimate
             grid on;
             legend({'vision-range-measure-raw','range-estimate'},'Location','northeast','FontSize',10);
             legend('boxoff')

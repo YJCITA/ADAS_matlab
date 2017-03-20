@@ -5,6 +5,8 @@ clc
 clear all
 close all
 
+is_save_results = 0; % 是否保存结果
+
 %% 数据导入
 log_id_vector = [14364, 14468, 14156, 10300, 15937, 13796, 1487, 12416, 8429, 9569, 11979, 11191, 11226, 15793, 10553];
 NUM_log = length(log_id_vector);
@@ -164,7 +166,7 @@ for log_index = 1:NUM_log
                 % 低通滤波处理                    
                 dt = time_vision - time_vision_range_pre;
                 time_vision_range_pre = time_vision;
-                filt_hz = 0.7; % 为了控制波动  基本0.7是极限（>1之后就会引入车辆波动导致的车速变化）
+                filt_hz = 3; % 为了控制波动  基本0.7是极限（>1之后就会引入车辆波动导致的车速变化）
                 [ vison_range_cur ] = fun_LowpassFilter( vison_range_cur, vison_range_raw, dt, filt_hz ); 
 
                 % X = [d, vs, vt]' 车距，本车速度，目标车速
@@ -190,16 +192,24 @@ for log_index = 1:NUM_log
                 save_vision_raw(:, save_i_index)= [time_cur; vison_range_raw];
                 dv =  Xk_new(2);% vt-vs 
                 % 计算ttc
-                if abs(dv) >0.5
-                    ttc = Xk_new(1)/dv;
+                if abs(dv) >0.2
+                    ttc = Xk_new(1)/abs(dv);
                 else
                     ttc = 0;
                 end
                 save_ttc(:, save_i_index) = [time_cur; ttc];
+                % 雷达ttc
+                if abs(radar_vel_cur) >0.2
+                    ttc_radar = radar_range_cur/abs(radar_vel_cur);
+                else
+                    ttc_radar = 0;
+                end
+                save_ttc_radar(:, save_i_index) = [time_cur; ttc_radar];
+                
                 save_relative_v(:, save_i_index) = [time_cur; dv];
                 save_z(:, save_i_index) = [time_cur; z];
                 save_radar(:, save_i_index) = [time_cur; radar_range_cur; radar_vel_cur; radar_acc_cur];
-    %             save_dv_radar(:, save_i_index) = [time_cur; dv_radar];
+                save_car_speed(:, save_i_index) = [time_cur; speed_average];
                 save_dv_radar_filter(:, save_i_index) = [time_cur; dv_radar_filter];
                 save_dt_image(:, save_i_index) = [time_cur; dt_image];
                 save_fcw_state(:, save_i_index) = [time_cur; fcw_state];
@@ -219,11 +229,11 @@ for log_index = 1:NUM_log
 %     figure('visible','off')    
     h = figure();
     % 车距
-    subplot(3,1,1)
-    plot(save_vision_raw(1,:), save_vision_raw(2,:)); % vision range 量测
+    ax1 = subplot(3,1,1);
+    plot(save_vision_raw(1,:), save_vision_raw(2,:), '.'); % vision range 量测
     hold on;
     plot(save_Xk(1,:), save_Xk(2,:)); % range-estimate
-    plot(save_radar(1,:), save_radar(2,:)); % 雷达
+    plot(save_radar(1,:), save_radar(2,:), '.'); % 雷达
     grid on;
     legend({'vision-range-measure-raw','range-estimate','radar-range'},'Location','northeast','FontSize',7);
     legend('boxoff')
@@ -231,47 +241,54 @@ for log_index = 1:NUM_log
     str_name = sprintf('log文件: %s \n 车距 ', log_addr_t);
     title(str_name);
     
-    % 速度
-    subplot(3,1,2)
-    plot(save_relative_v(1,:), save_relative_v(2,:)); % vel estimation
+    % 速度 & 本车速度
+    ax2 = subplot(3,1,2);
+    plot(save_relative_v(1,:), save_relative_v(2,:), '.'); % vel estimation
     hold on;
-    plot(save_radar(1,:), save_radar(3,:)); % 雷达测量相对速度
+    plot(save_radar(1,:), save_radar(3,:), '.'); % 雷达测量相对速度
+    plot(save_radar(1,:), save_radar(4,:), '.'); % 雷达测量acc
+    plot(save_car_speed(1,:), save_car_speed(2,:), '.'); % speed-car    
     grid on;
-    legend({'vel-estimation', 'radar-vel'},'Location','northeast','FontSize',7);
+    legend({'vel-estimation', 'radar-vel', 'radar-acc', 'speed-car'},'Location','northeast','FontSize',10);
     legend('boxoff')
     title('速度');
 
     % ttc fcw
-    subplot(3,1,3)
+    ax3 = subplot(3,1,3);
     NUM1 = length(save_ttc);
-    plot(save_ttc(1,:), save_ttc(2,:), '-'); % ttc
+    plot(save_ttc(1,:), save_ttc(2,:), '.'); % ttc
     hold on;
-    plot(save_fcw_state(1,:), save_fcw_state(2,:)*10); % fcw_mobileye
+    plot(save_ttc_radar(1,:), save_ttc_radar(2,:), '.'); % ttc-radar    
+    plot(save_fcw_state(1,:), save_fcw_state(2,:)*5); % fcw_mobileye
     NUM = length(save_ttc(1,:));
-    plot(save_ttc(1,:), ones(1,NUM)*4)
-    plot(save_ttc(1,:), ones(1,NUM)*-4)
+    plot(save_ttc(1,:), ones(1,NUM)*3)
     grid on;
-    legend({'ttc', 'fcw-mobileye','ttc = 4', 'ttc = -4'},'Location','northeast','FontSize',7);
+    legend({'ttc', 'ttc-radar', 'fcw-mobileye','ttc = 3'},'Location','northeast','FontSize',10);
     legend('boxoff')
     str_name = sprintf('ttc&fcw');
-    ylim([-30, 30]);
+    ylim([-1, 10]);
     title(str_name);
+    linkaxes([ax1,ax2,ax3], 'x'); % 同步子图的坐标轴
     
     % 保存figure
-    filename=[log_addr_t, '--plot.png'];
-    saveas(gcf,filename)
-%     close(gcf)    
-    
-    % 保存计算结果txt
-    NUM = length(save_Xk_file);
-    est_log_name = ['./data/est_result/', log_ID, '.log_KF_estimation.txt'];
-    fp = fopen(est_log_name, 'wt');
-    for i = 1:NUM
-        fprintf(fp, '%f %f %f %f\n', save_Xk_file(1, i), save_Xk_file(2, i), save_Xk_file(3, i), save_Xk_file(4, i));
-    end
-    fclose(fp);
+    if is_save_results
+        filename=[log_addr_t, '--plot.png'];
+        saveas(gcf,filename)
+    %     close(gcf)    
 
-    clear save_Xk save_radar save_relative_v save_ttc save_vision_raw save_fcw_state
+        % 保存计算结果txt
+        NUM = length(save_Xk_file);
+        est_log_name = ['./data/est_result/', log_ID, '.log_KF_estimation.txt'];
+        fp = fopen(est_log_name, 'wt');
+        for i = 1:NUM
+            fprintf(fp, '%f %f %f %f\n', save_Xk_file(1, i), save_Xk_file(2, i), save_Xk_file(3, i), save_Xk_file(4, i));
+        end
+        fclose(fp);
+    end
+    
+     clear save_Xk  save_relative_v save_ttc save_vision_raw save_fcw_state save_data_mobileye_tmp...
+            save_index_of_target save_vision_horizon save_dt_image save_speed_car save_ttc_raw save_fcw_state_mobileye...
+            save_radar save_ttc_radar save_car_speed
 end
 
 %% plot
