@@ -3,13 +3,16 @@
 %% 2017.03.18 适应新的数据格式，增加批处理能力，统计正报和误报
 % 以bounding box作为量测进行KF跟踪
 %% 2017.03.20  这个版本效果还OK，考虑增加连续的横向速度估计和IMU判断颠簸情况，去掉误报
+%% 2017.03.21  测试ADRC微分跟踪器
+
 clc
 clear all
 close all
 
 %% 数据导入
 % 遍历文件夹
-maindir = 'F:\数据\FCW\result_0316';
+% maindir = 'F:\数据\FCW\result_0316';
+maindir = 'F:\数据\FCW\BACK\跟踪的动态性\ADRC';
 sub_l1_dir  = dir( maindir );
 % 一级目录
 for l1_i = 1 : length( sub_l1_dir )
@@ -54,12 +57,13 @@ for l1_i = 1 : length( sub_l1_dir )
             index_of_target_pre = 0; % 上一帧目标车辆的ID
             is_new_target = 0; % 是否是新目标车辆            
             fcw_counter = 0; % 满足触发条件计数
+            
+            % ADRC
+            is_ADRC_init_OK = 0;
+            
           %% 主循环
             while ~feof(fid_log) % 读取log数据    
                 lineData = fgetl(fid_log);
-        %         str = 'Here is a date: 01-Apr-2020';
-        %         expression = '(?<day>\d+)-(?<month>\w+)-(?<year>\d+)';
-        %         mydate = regexp(str,expression,'names')
                 exp1 = '	';
                 str_line_raw = regexp(lineData, exp1, 'split'); %以空格为特征分割字符串
                 image_frame_id = str2num(str_line_raw{1,1});
@@ -129,6 +133,11 @@ for l1_i = 1 : length( sub_l1_dir )
                         Pk = diag([5, 4, 2, 1, 0.5, 0.5]);
                         Q = diag([5,2,5, 0.2, 0.5, 0.5]);
                         R = diag([4, 0.09]);  
+                        
+                        % ADRC
+                        ADRC_data = [0 0]';
+                        v1 = vison_range_raw;
+                        v2 = 0;
                     else
                         % 低通滤波处理 
                         filt_hz = 0.5; % 为了控制波动  基本0.7是极限（>1之后就会引入车辆波动导致的车速变化）
@@ -147,6 +156,23 @@ for l1_i = 1 : length( sub_l1_dir )
                          H = [1 0 0 0 0 0;
                               0 0 0 1 0 0];
                          [Xk, Pk] = fun_KF(Xk, Pk, z, Q, R, F, H);
+                         
+                     %%  ADRC微分跟踪器
+                        if ~is_ADRC_init_OK
+                            v1 = vison_range_raw;
+                            v2 = 0;
+                            h_fhan = 0.0125; % for fhan
+                            r = 1000;
+                            is_ADRC_init_OK = 1;
+                        end
+
+                        h_step = dt_image; 
+                        h_fhan = h_step*4;
+                        v = vison_range_raw;                        
+                        fh = fun_fhan(v1-v, v2, r, h_fhan);
+                        v1 = v1 + h_step*v2;
+                        v2 = v2 + h_step*fh;
+                        ADRC_data = [v1, v2]';
                     end
                     
                   %% FCW触发逻辑判断
@@ -191,7 +217,10 @@ for l1_i = 1 : length( sub_l1_dir )
                     save_data_mobileye_tmp(:, save_i_index) = [time_cur; data_mobileye_tmp];    
                     save_index_of_target(:, save_i_index) = [time_cur; index_of_target];       
                     save_vision_horizon(:, save_i_index) = [time_cur; vision_horizon];   
-                    save_speed_car(:, save_i_index) = [time_cur; speed_cur];                       
+                    save_speed_car(:, save_i_index) = [time_cur; speed_cur];   
+                    
+                    % ADRC
+                    save_ADRC_data(:, save_i_index) = [time_cur; ADRC_data];  
                     
                 end        
             end
@@ -203,26 +232,40 @@ for l1_i = 1 : length( sub_l1_dir )
             plot(save_vision_raw(1,:), save_vision_raw(2,:), '.'); % vision range 量测
             hold on;
             plot(save_Xk(1,:), save_Xk(2,:), '.'); % range-estimate
+            plot(save_ADRC_data(1,:), save_ADRC_data(2,:), '.'); % range-ADRC
             grid on;
-            legend({'vision-range-measure-raw','range-estimate'},'Location','northeast','FontSize',10);
+            legend({'vision-range-measure-raw','range-estimate', 'range-ADRC'},'Location','northeast','FontSize',10);
             legend('boxoff')
             log_addr_t = log_addr;
             str_name = sprintf('log文件: %s \n 车距 ', log_addr_t);
             title(str_name);
-
-            % 速度 & 加速度 & 横向距离 & 本车速度
+            
+            % 速度 & 加速度 &本车速度
             ax2 = subplot(3,1,2);
             plot(save_Xk(1,:), save_Xk(3, :), '.'); % vel estimation
             hold on;
             plot(save_Xk(1,:), save_Xk(4,:), '.'); % acc estimation
-            plot(save_Xk(1,:), save_Xk(5,:)*10, '.'); % vision horizon
-            plot(save_Xk(1,:), save_Xk(6,:)*10, '.'); % vision horizon vel
+            plot(save_ADRC_data(1,:), save_ADRC_data(3,:), '.'); % vel-ADRC
             plot(save_speed_car(1,:), save_speed_car(2,:), '.'); % speed-car
             grid on;
-            legend({'vel-estimation','acc-estimation', 'vision-horizon*10', 'vision-horizon-vel*10', 'speed-car'},'Location','northeast','FontSize',10);
+            legend({'vel-estimation','acc-estimation', 'vel-ADRC', 'speed-car'},'Location','northeast','FontSize',10);
 %             ylim([-30, 10]);
             legend('boxoff')
             title('速度&加速度&横向距离&本车速度');
+
+%             % 速度 & 加速度 & 横向距离 & 本车速度
+%             ax2 = subplot(3,1,2);
+%             plot(save_Xk(1,:), save_Xk(3, :), '.'); % vel estimation
+%             hold on;
+%             plot(save_Xk(1,:), save_Xk(4,:), '.'); % acc estimation
+%             plot(save_Xk(1,:), save_Xk(5,:)*10, '.'); % vision horizon
+%             plot(save_Xk(1,:), save_Xk(6,:)*10, '.'); % vision horizon vel
+%             plot(save_speed_car(1,:), save_speed_car(2,:), '.'); % speed-car
+%             grid on;
+%             legend({'vel-estimation','acc-estimation', 'vision-horizon*10', 'vision-horizon-vel*10', 'speed-car'},'Location','northeast','FontSize',10);
+% %             ylim([-30, 10]);
+%             legend('boxoff')
+%             title('速度&加速度&横向距离&本车速度');
             
             % ttc fcw
             ax3 = subplot(3,1,3);
@@ -258,8 +301,9 @@ for l1_i = 1 : length( sub_l1_dir )
         %     fclose(fp);
         % 
             clear save_Xk  save_relative_v save_ttc save_vision_raw save_fcw_state save_data_mobileye_tmp...
-                save_index_of_target save_vision_horizon save_dt_image save_speed_car save_ttc_raw save_fcw_state_mobileye
-            clsoe fid_log
+                save_index_of_target save_vision_horizon save_dt_image save_speed_car save_ttc_raw save_fcw_state_mobileye...
+                save_ADRC_data
+            fclose(fid_log);
 
         end
     end

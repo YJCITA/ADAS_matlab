@@ -3,13 +3,14 @@
 %% 2017.03.18 适应新的数据格式，增加批处理能力，统计正报和误报
 % 以bounding box作为量测进行KF跟踪
 %% 2017.03.20  这个版本效果还OK，考虑增加连续的横向速度估计和IMU判断颠簸情况，去掉误报
+%% 2017.03.21 适应徐涵的数据结构
 clc
 clear all
 close all
 
 %% 数据导入
 % 遍历文件夹
-maindir = 'F:\数据\FCW\result_0316';
+maindir = 'F:\数据\FCW\0321_vison_radar';
 sub_l1_dir  = dir( maindir );
 % 一级目录
 for l1_i = 1 : length( sub_l1_dir )
@@ -22,7 +23,7 @@ for l1_i = 1 : length( sub_l1_dir )
         if( isequal( sub_l2_dir(l2_i).name, '.' )|| isequal( sub_l2_dir(l2_i).name, '..')||  ~sub_l2_dir(l2_i).isdir)               % 如果不是目录则跳过
             continue;
         end
-        subdirpath = fullfile( maindir, sub_l1_dir(l1_i).name, sub_l2_dir(l2_i).name, '*.txt' );
+        subdirpath = fullfile( maindir, sub_l1_dir(l1_i).name, sub_l2_dir(l2_i).name, '*.critical' );
         txt_dir = dir( subdirpath );               % 子文件夹下找后缀为txt的文件
         for txt_i = 1:length(txt_dir)
             log_addr = fullfile( maindir, sub_l1_dir(l1_i).name, sub_l2_dir(l2_i).name, txt_dir(txt_i).name);
@@ -30,6 +31,8 @@ for l1_i = 1 : length( sub_l1_dir )
 
            %% 初始化
             ipm_step = 1; % 步长
+            is_first_read_timestamp = 1;
+            time_start = 0; 
             % 量测数据
             struct_speed.data = 0;
             struct_speed.counter = 0;
@@ -60,14 +63,18 @@ for l1_i = 1 : length( sub_l1_dir )
         %         str = 'Here is a date: 01-Apr-2020';
         %         expression = '(?<day>\d+)-(?<month>\w+)-(?<year>\d+)';
         %         mydate = regexp(str,expression,'names')
-                exp1 = '	';
+                exp1 = ',';
                 str_line_raw = regexp(lineData, exp1, 'split'); %以空格为特征分割字符串
-                image_frame_id = str2num(str_line_raw{1,1});
-                image_timestamp_cur = image_frame_id*image_frame_T; % 通过图像生成频率计算timestamp
-                str_frame_index = str2num(str_line_raw{1,2}); % 每一幅图对应3帧
+                str_frame_index = str2num(str_line_raw{1,1}); % 每一幅图对应3帧 0:detect_vehicle_record    1:radar-recod  2：mobileye
+                % 为了画图方便  获取出事时刻的时间
+                if is_first_read_timestamp
+                    time_start = str2num(str_line_raw{1,2}); 
+                    is_first_read_timestamp = 0;
+                end
 
                 % 读取mobileye 数据
-                if(str_frame_index == 1)
+                % 待增加
+                if(str_frame_index == 2)
                     data_mobileye_tmp(1,1) = str2num(str_line_raw{1,21});
                     data_mobileye_tmp(2,1) = str2num(str_line_raw{1,23});
                     if(data_mobileye_tmp(1) == 0 && data_mobileye_tmp(2) == 1)
@@ -76,15 +83,29 @@ for l1_i = 1 : length( sub_l1_dir )
                         mobileye_fcw_state = 0;
                     end
                 end
+                mobileye_fcw_state = 0;
 
-                % 新数据 index: 0: minieye vision raw result   2: filter data        
+                % 1: radar-recod      
+                if(str_frame_index == 1)
+                    speed_cur = str2num(str_line_raw{1,20+2});
+                    radar_range = str2num(str_line_raw{1,19+2});
+                    radar_range_vel = str2num(str_line_raw{1,16+2});
+                    radar_range_acc = str2num(str_line_raw{1,14+2});
+                    radar_horiz_dist = str2num(str_line_raw{1,18+2});
+                    radar_data = [radar_range  radar_range_vel radar_range_acc radar_horiz_dist]';
+                    
+                    radar_ttc = str2num(str_line_raw{1,17+2});
+                end
+                
+                % 0:   detect_vehicle_record 
                 if(str_frame_index == 0)
-                    % 采用 index:0 读取数据
-                    speed_cur = str2num(str_line_raw{1,12});
-                    vison_range_raw = str2num(str_line_raw{1,13});
-                    vision_horizon = str2num(str_line_raw{1,14});
-                    index_of_target = str2num(str_line_raw{1,17}); % >=0 is legal
-                    ttc_raw = str2num(str_line_raw{1,19}); 
+                    % 采用 index:0 读取数据        
+                    image_timestamp_cur = str2num(str_line_raw{1,2}) - time_start; 
+                    image_frame_id = str2num(str_line_raw{1,4+2});
+                    vison_range_raw = str2num(str_line_raw{1,10+2});
+                    vision_horizon = str2num(str_line_raw{1,11+2});
+                    index_of_target = str2num(str_line_raw{1,2+2});
+                    ttc_raw = str2num(str_line_raw{1,14+2}); 
 
                     if(is_first_read_legal_data)
                         image_timestamp_pre = image_timestamp_cur;
@@ -117,7 +138,7 @@ for l1_i = 1 : length( sub_l1_dir )
                     image_timestamp_pre = image_timestamp_cur; 
                     % 为了处理长时间没有有效前车的问题 dt太大则重置滤波
                     % 对于新目标，也要重置滤波
-                    if(dt_image > 0.5 || is_new_target)
+                    if(dt_image > 0.3 || is_new_target)
                         % dt >1 则重置
                         acc = 0;
                         speed_relative = 0;
@@ -144,9 +165,9 @@ for l1_i = 1 : length( sub_l1_dir )
                         O33 = zeros(3, 3);
                         F = [F_sub, O33;
                              O33, F_sub];
-                         H = [1 0 0 0 0 0;
+                        H = [1 0 0 0 0 0;
                               0 0 0 1 0 0];
-                         [Xk, Pk] = fun_KF(Xk, Pk, z, Q, R, F, H);
+                        [Xk, Pk] = fun_KF(Xk, Pk, z, Q, R, F, H);
                     end
                     
                   %% FCW触发逻辑判断
@@ -166,7 +187,7 @@ for l1_i = 1 : length( sub_l1_dir )
                     acc_cur = Xk(3);
                     horizon_range = Xk(4);
                     horizon_vel = Xk(5); % 横向速度大于0.8不报警（目前可能弯道就有问题）  % 还要考虑是否已经在减速
-                    if(ttc<3.3 && ttc>0 && speed_cur>40/3.6 && abs(vision_horizon)<1.2 && abs(horizon_vel)<0.6 && vel_cur<-1)  %  && range_cur<35 
+                    if(ttc<3.3 && ttc>0 && speed_cur>40/3.6 && abs(vision_horizon)<2 && abs(horizon_vel)<0.6 && vel_cur<-1)  %  && range_cur<35 
                         fcw_counter = fcw_counter + 1;
                         if(fcw_counter >= 5)
                             fcw_state = 1;
@@ -188,10 +209,12 @@ for l1_i = 1 : length( sub_l1_dir )
                     save_dt_image(:, save_i_index) = [time_cur; dt_image];
                     save_fcw_state_mobileye(:, save_i_index) = [time_cur; mobileye_fcw_state];
                     save_fcw_state(:, save_i_index) = [time_cur;fcw_state ];
-                    save_data_mobileye_tmp(:, save_i_index) = [time_cur; data_mobileye_tmp];    
+%                     save_data_mobileye_tmp(:, save_i_index) = [time_cur; data_mobileye_tmp];    
                     save_index_of_target(:, save_i_index) = [time_cur; index_of_target];       
                     save_vision_horizon(:, save_i_index) = [time_cur; vision_horizon];   
-                    save_speed_car(:, save_i_index) = [time_cur; speed_cur];                       
+                    save_speed_car(:, save_i_index) = [time_cur; speed_cur];        
+                    save_radar_data(:, save_i_index) = [time_cur; radar_data];   %  [radar_range  radar_range_vel radar_range_acc radar_horiz_dist]';
+                    save_radar_ttc(:, save_i_index) = [time_cur; radar_ttc];                    
                     
                 end        
             end
@@ -203,8 +226,9 @@ for l1_i = 1 : length( sub_l1_dir )
             plot(save_vision_raw(1,:), save_vision_raw(2,:), '.'); % vision range 量测
             hold on;
             plot(save_Xk(1,:), save_Xk(2,:), '.'); % range-estimate
+            plot(save_radar_data(1,:), save_radar_data(2,:), '.'); % radar-range
             grid on;
-            legend({'vision-range-measure-raw','range-estimate'},'Location','northeast','FontSize',10);
+            legend({'vision-range-measure-raw','range-estimate', 'radar-range'},'Location','northeast','FontSize',10);
             legend('boxoff')
             log_addr_t = log_addr;
             str_name = sprintf('log文件: %s \n 车距 ', log_addr_t);
@@ -229,13 +253,14 @@ for l1_i = 1 : length( sub_l1_dir )
             NUM1 = length(save_ttc);
             plot(save_ttc(1,:), save_ttc(2,:), '.'); % ttc
             hold on;
+            plot(save_radar_ttc(1,:), save_radar_ttc(2,:), '.'); % radar-ttc            
             plot(save_fcw_state(1,:), save_fcw_state_mobileye(2,:)*5); % fcw_mobileye
             plot(save_fcw_state(1,:), save_fcw_state(2,:)*5); % fcw_minieye
             NUM = length(save_ttc(1,:));
             plot(save_ttc(1,:), ones(1,NUM)*3.3)
 %             plot(save_ttc(1,:), ones(1,NUM)*-4)
             grid on;
-            legend({'ttc', 'fcw-mobileye','fcw-minieye', 'ttc'},'Location','northeast','FontSize',10);
+            legend({'ttc', 'radar-ttc', 'fcw-mobileye','fcw-minieye', 'ttc'},'Location','northeast','FontSize',10);
             legend('boxoff')
             str_name = sprintf('ttc&fcw');
             ylim([-1, 10]);
@@ -258,8 +283,9 @@ for l1_i = 1 : length( sub_l1_dir )
         %     fclose(fp);
         % 
             clear save_Xk  save_relative_v save_ttc save_vision_raw save_fcw_state save_data_mobileye_tmp...
-                save_index_of_target save_vision_horizon save_dt_image save_speed_car save_ttc_raw save_fcw_state_mobileye
-            clsoe fid_log
+                save_index_of_target save_vision_horizon save_dt_image save_speed_car save_ttc_raw save_fcw_state_mobileye...
+                save_radar_data
+            fclose(fid_log);
 
         end
     end
